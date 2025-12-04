@@ -10,8 +10,8 @@ defaults:
 # Paths Configuration (Change this to your own paths)
 # ============================================================================
 paths:
-  dataset_root: <YOUR_DATASET_DIR>  # Directory containing COCO format data
-  experiment_log_dir: <YOUR_EXPERIMENT_LOG_DIR>
+  dataset_root: /workspace/data
+  experiment_log_dir: /workspace/outputs/sam3_lora_minimal
   bpe_path: sam3/assets/bpe_simple_vocab_16e6.txt.gz
 
 # ============================================================================
@@ -264,6 +264,7 @@ trainer:
         load_segmentation: ${training.enable_segmentation}
         max_ann_per_img: 500000
         training: true
+        multiplier: 1
         use_caching: false
 
       shuffle: true
@@ -288,6 +289,7 @@ trainer:
         load_segmentation: ${training.enable_segmentation}
         max_ann_per_img: 100000
         training: false
+        multiplier: 1
         coco_json_loader:
           _target_: sam3.train.data.coco_json_loaders.COCO_FROM_JSON
           include_negatives: true
@@ -303,7 +305,7 @@ trainer:
         _target_: sam3.train.data.collator.collate_fn_api
         _partial_: true
         repeats: 1
-        dict_key: all
+        dict_key: detection
         with_seg_masks: ${training.enable_segmentation}
 
   # Model with LoRA
