@@ -14,6 +14,7 @@ from PIL import Image as PILImage
 
 # SAM3 Imports
 from sam3.model_builder import build_sam3_image_model
+from sam3.model.model_misc import SAM3Output
 from sam3.train.loss.loss_fns import IABCEMdetr, Boxes, Masks, CORE_LOSS_KEY
 from sam3.train.loss.sam3_loss import Sam3LossWrapper
 from sam3.train.matcher import BinaryHungarianMatcherV2, BinaryOneToManyMatcher
@@ -358,16 +359,21 @@ class SAM3TrainerNative:
                             targets[k] = v.to(self.device)
 
                 # Add matcher indices to outputs (required by Sam3LossWrapper)
-                # We need to add "indices" to each output dict (main + aux_outputs)
-                for stage_outputs in outputs_list:
-                    for outputs in stage_outputs:
-                        # Compute indices for main output
-                        outputs["indices"] = self.matcher(outputs, find_targets[0])
+                # Use SAM3Output.iteration_mode to properly iterate over outputs
+                with SAM3Output.iteration_mode(
+                    outputs_list, iter_mode=SAM3Output.IterMode.ALL_STEPS_PER_STAGE
+                ) as outputs_iter:
+                    for stage_outputs, stage_targets in zip(outputs_iter, find_targets):
+                        # stage_targets is a single target dict, replicate for all steps
+                        stage_targets_list = [stage_targets] * len(stage_outputs)
+                        for outputs, targets in zip(stage_outputs, stage_targets_list):
+                            # Compute indices for main output
+                            outputs["indices"] = self.matcher(outputs, targets)
 
-                        # Also add indices to auxiliary outputs if they exist
-                        if "aux_outputs" in outputs:
-                            for aux_out in outputs["aux_outputs"]:
-                                aux_out["indices"] = self.matcher(aux_out, find_targets[0])
+                            # Also add indices to auxiliary outputs if they exist
+                            if "aux_outputs" in outputs:
+                                for aux_out in outputs["aux_outputs"]:
+                                    aux_out["indices"] = self.matcher(aux_out, targets)
 
                 # Compute loss using Sam3LossWrapper
                 # This handles num_boxes calculation and proper weighting
@@ -407,12 +413,16 @@ class SAM3TrainerNative:
                                     targets[k] = v.to(self.device)
 
                         # Add matcher indices to outputs (required by Sam3LossWrapper)
-                        for stage_outputs in outputs_list:
-                            for outputs in stage_outputs:
-                                outputs["indices"] = self.matcher(outputs, find_targets[0])
-                                if "aux_outputs" in outputs:
-                                    for aux_out in outputs["aux_outputs"]:
-                                        aux_out["indices"] = self.matcher(aux_out, find_targets[0])
+                        with SAM3Output.iteration_mode(
+                            outputs_list, iter_mode=SAM3Output.IterMode.ALL_STEPS_PER_STAGE
+                        ) as outputs_iter:
+                            for stage_outputs, stage_targets in zip(outputs_iter, find_targets):
+                                stage_targets_list = [stage_targets] * len(stage_outputs)
+                                for outputs, targets in zip(stage_outputs, stage_targets_list):
+                                    outputs["indices"] = self.matcher(outputs, targets)
+                                    if "aux_outputs" in outputs:
+                                        for aux_out in outputs["aux_outputs"]:
+                                            aux_out["indices"] = self.matcher(aux_out, targets)
 
                         # Compute loss using Sam3LossWrapper
                         loss_dict = self.loss_wrapper(outputs_list, find_targets)
