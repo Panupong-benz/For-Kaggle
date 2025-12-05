@@ -327,18 +327,22 @@ class SAM3TrainerNative:
                 # Compute Matcher Indices
                 # outputs has 'pred_logits', 'pred_boxes'
                 # targets has 'boxes', 'labels' etc.
-                
+
                 # We need indices for loss
                 # The loss wrapper usually calls matcher.
                 # We do it manually here.
                 indices = self.matcher(outputs, targets)
-                
+
+                # Calculate actual number of ground truth boxes for normalization
+                num_boxes = targets['boxes'].shape[0] if 'boxes' in targets and targets['boxes'].numel() > 0 else 1
+                num_boxes = max(num_boxes, 1)  # Avoid division by zero
+
                 # Compute Losses
                 losses = {}
-                
-                l_cls = self.criterion_cls.get_loss(outputs, targets, indices, num_boxes=1)
-                l_box = self.criterion_box.get_loss(outputs, targets, indices, num_boxes=1)
-                l_mask = self.criterion_mask.get_loss(outputs, targets, indices, num_boxes=1)
+
+                l_cls = self.criterion_cls.get_loss(outputs, targets, indices, num_boxes=num_boxes)
+                l_box = self.criterion_box.get_loss(outputs, targets, indices, num_boxes=num_boxes)
+                l_mask = self.criterion_mask.get_loss(outputs, targets, indices, num_boxes=num_boxes)
                 
                 losses.update(l_cls)
                 losses.update(l_box)
@@ -384,9 +388,13 @@ class SAM3TrainerNative:
                         indices = self.matcher(outputs, targets)
                         losses = {}
 
-                        l_cls = self.criterion_cls.get_loss(outputs, targets, indices, num_boxes=1)
-                        l_box = self.criterion_box.get_loss(outputs, targets, indices, num_boxes=1)
-                        l_mask = self.criterion_mask.get_loss(outputs, targets, indices, num_boxes=1)
+                        # Calculate actual number of ground truth boxes for normalization
+                        num_boxes = targets['boxes'].shape[0] if 'boxes' in targets and targets['boxes'].numel() > 0 else 1
+                        num_boxes = max(num_boxes, 1)  # Avoid division by zero
+
+                        l_cls = self.criterion_cls.get_loss(outputs, targets, indices, num_boxes=num_boxes)
+                        l_box = self.criterion_box.get_loss(outputs, targets, indices, num_boxes=num_boxes)
+                        l_mask = self.criterion_mask.get_loss(outputs, targets, indices, num_boxes=num_boxes)
 
                         losses.update(l_cls)
                         losses.update(l_box)
