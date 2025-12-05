@@ -299,8 +299,8 @@ def main():
     parser.add_argument(
         "--weights",
         type=str,
-        required=True,
-        help="Path to trained LoRA weights (.pt file)"
+        default=None,
+        help="Path to trained LoRA weights (.pt file). If not specified, uses best_lora_weights.pt from config's output_dir"
     )
     parser.add_argument(
         "--image",
@@ -333,8 +333,19 @@ def main():
     if not os.path.exists(args.config):
         print(f"❌ Config file not found: {args.config}")
         return
+
+    # Auto-detect weights path if not provided
+    if args.weights is None:
+        import yaml
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+        output_dir = config.get('output', {}).get('output_dir', 'outputs/sam3_lora_full')
+        args.weights = os.path.join(output_dir, 'best_lora_weights.pt')
+        print(f"ℹ️  Using best model: {args.weights}")
+
     if not os.path.exists(args.weights):
         print(f"❌ Weights file not found: {args.weights}")
+        print(f"   Available: best_lora_weights.pt or last_lora_weights.pt")
         return
     if not os.path.exists(args.image):
         print(f"❌ Image file not found: {args.image}")

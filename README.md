@@ -97,16 +97,33 @@ Applying LoRA...
 Applied LoRA to 64 modules
 Trainable params: 4,200,000 (~0.5%)  ← Should be ~1%!
 Starting training for 20 epochs...
+Training samples: 700, Validation samples: 100
+
 Epoch 1: 100%|████████| 700/700 [12:00<00:00, loss=0.45]
+Validation: 100%|████████| 100/100 [01:30<00:00, val_loss=0.38]
+Epoch 1/20 - Validation Loss: 0.380000
+✓ Saved best model (val_loss: 0.380000)
+
+Epoch 2: 100%|████████| 700/700 [12:00<00:00, loss=0.32]
+Validation: 100%|████████| 100/100 [01:30<00:00, val_loss=0.29]
+Epoch 2/20 - Validation Loss: 0.290000
+✓ Saved best model (val_loss: 0.290000)
+...
 ```
 
 ### 3. Run Inference
 
 ```bash
-# Segment objects in new images
+# Segment objects in new images (automatically uses best model)
 python3 inference_lora.py \
   --config configs/full_lora_config.yaml \
-  --weights outputs/sam3_lora_full/lora_weights.pt \
+  --image test_image.jpg \
+  --output predictions.png
+
+# Or specify weights explicitly
+python3 inference_lora.py \
+  --config configs/full_lora_config.yaml \
+  --weights outputs/sam3_lora_full/best_lora_weights.pt \
   --image test_image.jpg \
   --output predictions.png
 ```
@@ -159,20 +176,32 @@ Then train:
 python3 train_sam3_lora_native.py --config configs/my_config.yaml
 ```
 
+### Model Checkpointing
+
+During training, two models are automatically saved:
+- **`best_lora_weights.pt`**: Best model based on validation loss (recommended for inference)
+- **`last_lora_weights.pt`**: Model from the last epoch
+
+Training monitors validation loss and saves the best model automatically.
+
 ### Training Tips
 
 **Starting Out:**
 - Use `rank: 4` or `rank: 8` for quick experiments
 - Set `num_epochs: 5` for initial tests
 - Monitor that trainable params are ~0.5-2%
+- Watch validation loss - it should decrease over epochs
 
 **Production Training:**
 - Increase to `rank: 16` or `rank: 32` for better performance
 - Use `num_epochs: 20-50` depending on dataset size
 - Enable more components (DETR encoder/decoder) if needed
+- Use early stopping if validation loss stops improving
 
 **Troubleshooting:**
 - **Loss too low (< 0.001)**: Model might be overfitting, reduce rank or add regularization
+- **Val loss > Train loss**: Normal, indicates some overfitting
+- **Val loss increasing**: Overfitting! Reduce rank, add dropout, or stop training
 - **Loss not decreasing**: Increase learning rate or rank
 - **OOM errors**: Reduce batch size or rank
 - **63% trainable params**: Bug! Should be ~1% - make sure base model is frozen
@@ -184,17 +213,22 @@ python3 train_sam3_lora_native.py --config configs/my_config.yaml
 ### Command Line
 
 ```bash
-# Basic inference
+# Basic inference (automatically uses best model)
 python3 inference_lora.py \
   --config configs/full_lora_config.yaml \
-  --weights outputs/sam3_lora_full/lora_weights.pt \
+  --image path/to/image.jpg \
+  --output predictions.png
+
+# Use last epoch model instead
+python3 inference_lora.py \
+  --config configs/full_lora_config.yaml \
+  --weights outputs/sam3_lora_full/last_lora_weights.pt \
   --image path/to/image.jpg \
   --output predictions.png
 
 # With custom confidence threshold
 python3 inference_lora.py \
   --config configs/full_lora_config.yaml \
-  --weights outputs/sam3_lora_full/lora_weights.pt \
   --image path/to/image.jpg \
   --threshold 0.7 \
   --output predictions.png
@@ -463,7 +497,8 @@ sam3_lora/
 │       └── annotations/           # JSON annotations
 ├── outputs/
 │   └── sam3_lora_full/
-│       └── lora_weights.pt        # Trained LoRA weights
+│       ├── best_lora_weights.pt   # Best model (lowest val loss)
+│       └── last_lora_weights.pt   # Last epoch model
 ├── sam3/                          # SAM3 model library
 ├── lora_layers.py                 # LoRA implementation
 ├── train_sam3_lora_native.py      # Training script
