@@ -19,7 +19,7 @@ import torch.nn as nn
 import yaml
 
 # Add SAM3 to path
-sys.path.insert(0, '/workspace/sam3')
+# sys.path.insert(0, '/workspace/sam3')  # SAM3 is now local
 
 from sam3.model_builder import build_sam3_image_model
 

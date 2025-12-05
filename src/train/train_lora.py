@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 import sys
-sys.path.insert(0, '/workspace/sam3')
+# sys.path.insert(0, '/workspace/sam3')
 
 from sam3.model_builder import build_sam3_image_model
 from sam3.train.utils.train_utils import AverageMeter, set_seeds, setup_distributed_backend

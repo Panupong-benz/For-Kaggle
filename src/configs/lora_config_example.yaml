@@ -11,7 +11,7 @@ defaults:
 paths:
   data_root: /workspace/sam3_lora/data
   experiment_log_dir: /workspace/sam3_lora/experiments
-  bpe_path: /workspace/sam3/assets/bpe_simple_vocab_16e6.txt.gz  # Path to BPE vocab file
+  bpe_path: ./sam3/assets/bpe_simple_vocab_16e6.txt.gz  # Path to BPE vocab file
   sam3_checkpoint: null  # Path to pretrained SAM3 checkpoint (set to null if not available)
 
 # ============================================================================
