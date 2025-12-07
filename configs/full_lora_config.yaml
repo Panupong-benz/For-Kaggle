@@ -32,10 +32,10 @@ lora:
 
 # Training settings
 training:
-  train_data_path: "/workspace/SAM3_LoRA/data/train"
-  val_data_path: "/workspace/SAM3_LoRA/data/valid"
-  batch_size: 6           # Smaller batch due to more parameters
-  num_workers: 4
+  train_data_path: "/workspace/data/train"
+  val_data_path: "/workspace/data/valid"
+  batch_size: 8         # Smaller batch due to more parameters
+  num_workers: 1
 
   learning_rate: 1e-5        # Much lower LR for initial stability
   weight_decay: 0.01

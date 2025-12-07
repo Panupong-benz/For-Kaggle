@@ -11,6 +11,7 @@ from tqdm import tqdm
 from pathlib import Path
 import numpy as np
 from PIL import Image as PILImage
+import contextlib
 
 # SAM3 Imports
 from sam3.model_builder import build_sam3_image_model
@@ -24,6 +25,13 @@ from sam3.model.box_ops import box_xywh_to_xyxy
 from lora_layers import LoRAConfig, apply_lora_to_model, save_lora_weights, count_parameters
 
 from torchvision.transforms import v2
+
+# Import evaluation modules
+from sam3.eval.cgf1_eval import CGF1Evaluator, COCOCustom
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
+import pycocotools.mask as mask_utils
+from sam3.train.masks_ops import rle_encode
 
 class SimpleSAM3Dataset(Dataset):
     def __init__(self, root_dir, image_set="train"):
@@ -155,6 +163,165 @@ class SimpleSAM3Dataset(Dataset):
             images=[image_obj],
             raw_images=[pil_image] # Keep raw image as PIL (resized or original? Collator might merge them)
         )
+
+
+def convert_predictions_to_coco_format(predictions_list, image_ids, resolution=288, score_threshold=0.0, debug=False):
+    """
+    Convert model predictions to COCO format for evaluation.
+
+    OPTIMIZATION: Keep masks at native model output resolution (288×288)
+    GT is downsampled to match, so no upsampling needed!
+
+    Args:
+        predictions_list: List of prediction dictionaries from the model
+        image_ids: List of image IDs corresponding to predictions
+        resolution: Mask resolution for evaluation (default: 288, model's native output)
+        score_threshold: Minimum score threshold for predictions
+        debug: Print debug information
+
+    Returns:
+        List of prediction dictionaries in COCO format
+    """
+    coco_predictions = []
+    pred_id = 0
+
+    for img_id, preds in zip(image_ids, predictions_list):
+        if preds is None or len(preds.get('pred_logits', [])) == 0:
+            continue
+
+        # Extract predictions
+        logits = preds['pred_logits']  # [num_queries, 1]
+        boxes = preds['pred_boxes']    # [num_queries, 4]
+        masks = preds['pred_masks']    # [num_queries, H, W]
+
+        scores = torch.sigmoid(logits).squeeze(-1)  # [num_queries]
+
+        # Filter by score threshold
+        valid_mask = scores > score_threshold
+        num_before = len(scores)
+        scores = scores[valid_mask]
+        boxes = boxes[valid_mask]
+        masks = masks[valid_mask]
+
+        if debug and img_id == image_ids[0]:  # Debug first image only
+            print(f"  Image {img_id}: {num_before} queries -> {len(scores)} after filtering (threshold={score_threshold})")
+
+        # Convert masks to binary
+        binary_masks = (masks > 0.5).cpu()
+
+        # Encode masks to RLE (at native resolution - much faster!)
+        if len(binary_masks) > 0:
+            # Check if masks have content
+            mask_areas = binary_masks.flatten(1).sum(1)
+
+            if debug and img_id == image_ids[0]:
+                print(f"  Mask shape: {binary_masks.shape}")
+                print(f"  Mask areas: min={mask_areas.min():.0f}, max={mask_areas.max():.0f}, mean={mask_areas.float().mean():.0f}")
+
+            rles = rle_encode(binary_masks)
+
+            for idx, (rle, score, box) in enumerate(zip(rles, scores.cpu().tolist(), boxes.cpu().tolist())):
+                # Convert box from normalized [cx, cy, w, h] to [x, y, w, h] in pixel coordinates
+                cx, cy, w, h = box
+                x = (cx - w/2) * resolution
+                y = (cy - h/2) * resolution
+                w = w * resolution
+                h = h * resolution
+
+                coco_predictions.append({
+                    'image_id': int(img_id),
+                    'category_id': 1,  # Single category for instance segmentation
+                    'segmentation': rle,
+                    'bbox': [float(x), float(y), float(w), float(h)],
+                    'score': float(score),
+                    'id': pred_id
+                })
+                pred_id += 1
+
+    return coco_predictions
+
+
+def create_coco_gt_from_dataset(dataset, image_ids=None, mask_resolution=288):
+    """
+    Create COCO ground truth dictionary from SimpleSAM3Dataset.
+
+    OPTIMIZATION: Downsample GT masks to match prediction resolution (288×288)
+    instead of upsampling predictions to 1008×1008. Much faster!
+
+    Args:
+        dataset: SimpleSAM3Dataset instance
+        image_ids: Optional list of specific image IDs to include
+        mask_resolution: Resolution to downsample masks to (default: 288 to match model output)
+
+    Returns:
+        Dictionary in COCO format
+    """
+    coco_gt = {
+        'info': {
+            'description': 'SAM3 LoRA Validation Dataset',
+            'version': '1.0',
+            'year': 2024
+        },
+        'images': [],
+        'annotations': [],
+        'categories': [{'id': 1, 'name': 'object'}]
+    }
+
+    ann_id = 0
+    indices = range(len(dataset)) if image_ids is None else image_ids
+
+    # Scale factor for boxes (masks will be at mask_resolution, boxes scaled accordingly)
+    scale_factor = mask_resolution / dataset.resolution
+
+    for idx in indices:
+        # Add image entry at mask resolution
+        coco_gt['images'].append({
+            'id': int(idx),
+            'width': mask_resolution,
+            'height': mask_resolution,
+            'is_instance_exhaustive': True  # Required for cgF1 evaluation
+        })
+
+        # Get datapoint
+        datapoint = dataset[idx]
+
+        # Add annotations
+        for obj in datapoint.images[0].objects:
+            # Convert normalized box to pixel coordinates at mask_resolution
+            box = obj.bbox * mask_resolution
+            x1, y1, x2, y2 = box.tolist()
+            x, y, w, h = x1, y1, x2-x1, y2-y1
+
+            ann = {
+                'id': ann_id,
+                'image_id': int(idx),
+                'category_id': 1,
+                'bbox': [x, y, w, h],
+                'area': w * h,
+                'iscrowd': 0,
+                'ignore': 0
+            }
+
+            # Add segmentation if available - downsample to mask_resolution
+            if obj.segment is not None:
+                # Downsample mask from 1008×1008 to mask_resolution×mask_resolution
+                mask_tensor = obj.segment.unsqueeze(0).unsqueeze(0).float()
+                downsampled_mask = torch.nn.functional.interpolate(
+                    mask_tensor,
+                    size=(mask_resolution, mask_resolution),
+                    mode='bilinear',
+                    align_corners=False
+                ) > 0.5
+
+                mask_np = downsampled_mask.squeeze().cpu().numpy().astype(np.uint8)
+                rle = mask_utils.encode(np.asfortranarray(mask_np))
+                rle['counts'] = rle['counts'].decode('utf-8')
+                ann['segmentation'] = rle
+
+            coco_gt['annotations'].append(ann)
+            ann_id += 1
+
+    return coco_gt
 
 
 class SAM3TrainerNative:
@@ -343,6 +510,10 @@ class SAM3TrainerNative:
                 return obj
             return obj
 
+        # Create output directory
+        out_dir = Path(self.config["output"]["output_dir"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+
         for epoch in range(epochs):
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}")
             for batch_dict in pbar:
@@ -400,9 +571,13 @@ class SAM3TrainerNative:
             if has_validation and val_loader is not None:
                 self.model.eval()
                 val_losses = []
+                all_predictions = []
+                all_image_ids = []
 
                 with torch.no_grad():
                     val_pbar = tqdm(val_loader, desc=f"Validation")
+                    batch_idx = 0
+
                     for batch_dict in val_pbar:
                         input_batch = batch_dict["input"]
                         input_batch = move_to_device(input_batch, self.device)
@@ -436,15 +611,129 @@ class SAM3TrainerNative:
                         total_loss = loss_dict[CORE_LOSS_KEY]
 
                         val_losses.append(total_loss.item())
+
+                        # Collect predictions for metrics computation (move to CPU to save memory)
+                        # Extract the final stage predictions
+                        with SAM3Output.iteration_mode(
+                            outputs_list, iter_mode=SAM3Output.IterMode.ALL_STEPS_PER_STAGE
+                        ) as outputs_iter:
+                            final_stage = list(outputs_iter)[-1]  # Get last stage
+                            final_outputs = final_stage[-1]  # Get last step
+
+                            # Debug output structure on first batch
+                            if batch_idx == 0 and epoch == 0:
+                                print(f"\n[DEBUG] Model output keys: {final_outputs.keys()}")
+                                print(f"[DEBUG] pred_logits shape: {final_outputs['pred_logits'].shape}")
+                                print(f"[DEBUG] pred_boxes shape: {final_outputs['pred_boxes'].shape}")
+                                print(f"[DEBUG] pred_masks shape: {final_outputs['pred_masks'].shape}")
+
+                            # Get batch size from outputs
+                            batch_size = final_outputs['pred_logits'].shape[0]
+
+                            for i in range(batch_size):
+                                img_id = batch_idx * self.config["training"]["batch_size"] + i
+                                all_image_ids.append(img_id)
+                                # Move predictions to CPU immediately to save GPU memory
+                                all_predictions.append({
+                                    'pred_logits': final_outputs['pred_logits'][i].detach().cpu(),
+                                    'pred_boxes': final_outputs['pred_boxes'][i].detach().cpu(),
+                                    'pred_masks': final_outputs['pred_masks'][i].detach().cpu()
+                                })
+
+                        batch_idx += 1
                         val_pbar.set_postfix({"val_loss": total_loss.item()})
 
+                        # Clear CUDA cache periodically to prevent memory buildup
+                        if batch_idx % 5 == 0:
+                            torch.cuda.empty_cache()
+
                 avg_val_loss = sum(val_losses) / len(val_losses)
-                print(f"Epoch {epoch+1}/{epochs} - Validation Loss: {avg_val_loss:.6f}")
 
-                # Save best model
-                out_dir = Path(self.config["output"]["output_dir"])
-                out_dir.mkdir(parents=True, exist_ok=True)
+                # Compute mAP and cgF1 metrics
+                print(f"\nEpoch {epoch+1}/{epochs} - Validation Loss: {avg_val_loss:.6f}")
+                print("Computing instance segmentation metrics...")
 
+                try:
+                    # Create COCO ground truth (downsampled to 288×288 - fast!)
+                    coco_gt_dict = create_coco_gt_from_dataset(
+                        val_ds,
+                        image_ids=all_image_ids,
+                        mask_resolution=288  # Downsample GT to match predictions
+                    )
+
+                    # Convert predictions to COCO format (at native 288×288 - fast!)
+                    coco_predictions = convert_predictions_to_coco_format(
+                        all_predictions,
+                        all_image_ids,
+                        resolution=288,  # Native model output resolution
+                        score_threshold=0.05,
+                        debug=False
+                    )
+
+                    if len(coco_predictions) > 0:
+                        # Save temporary files for evaluation
+                        temp_gt_file = out_dir / "temp_gt.json"
+                        temp_pred_file = out_dir / "temp_pred.json"
+
+                        with open(temp_gt_file, 'w') as f:
+                            json.dump(coco_gt_dict, f)
+                        with open(temp_pred_file, 'w') as f:
+                            json.dump(coco_predictions, f)
+
+                        # Compute mAP using COCO evaluation (suppress detailed output)
+                        with open(os.devnull, 'w') as devnull:
+                            with contextlib.redirect_stdout(devnull):
+                                coco_gt = COCO(str(temp_gt_file))
+                                coco_dt = coco_gt.loadRes(str(temp_pred_file))
+                                coco_eval = COCOeval(coco_gt, coco_dt, 'segm')
+                                coco_eval.params.useCats = False
+                                coco_eval.evaluate()
+                                coco_eval.accumulate()
+                                coco_eval.summarize()
+
+                        # Extract key metrics
+                        map_segm = coco_eval.stats[0]  # mAP @ IoU=0.50:0.95
+                        map50_segm = coco_eval.stats[1]  # mAP @ IoU=0.50
+                        map75_segm = coco_eval.stats[2]  # mAP @ IoU=0.75
+
+                        # Compute cgF1 using CGF1Evaluator (suppress detailed output)
+                        with open(os.devnull, 'w') as devnull:
+                            with contextlib.redirect_stdout(devnull):
+                                cgf1_evaluator = CGF1Evaluator(
+                                    gt_path=str(temp_gt_file),
+                                    iou_type='segm',
+                                    verbose=False
+                                )
+                                cgf1_results = cgf1_evaluator.evaluate(str(temp_pred_file))
+
+                        # Extract cgF1 metrics
+                        cgf1 = cgf1_results.get('cgF1_eval_segm_cgF1', 0.0)
+                        cgf1_50 = cgf1_results.get('cgF1_eval_segm_cgF1@0.5', 0.0)
+                        cgf1_75 = cgf1_results.get('cgF1_eval_segm_cgF1@0.75', 0.0)
+
+                        print(f"\nSummary: mAP={map_segm:.4f} mAP@50={map50_segm:.4f} mAP@75={map75_segm:.4f} | cgF1={cgf1:.4f} cgF1@50={cgf1_50:.4f} cgF1@75={cgf1_75:.4f}")
+
+                        # Clean up temporary files
+                        temp_gt_file.unlink()
+                        temp_pred_file.unlink()
+                    else:
+                        print("No predictions with score > 0.05. Skipping metrics computation.")
+                        map_segm = 0.0
+                        cgf1 = 0.0
+
+                except Exception as e:
+                    print(f"Error computing metrics: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    map_segm = 0.0
+                    cgf1 = 0.0
+
+                # Free memory from predictions
+                del all_predictions
+                del all_image_ids
+                torch.cuda.empty_cache()
+
+                # Save best model based on validation loss
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
                     save_lora_weights(self.model, str(out_dir / "best_lora_weights.pt"))
@@ -453,17 +742,16 @@ class SAM3TrainerNative:
                 # Save latest model
                 save_lora_weights(self.model, str(out_dir / "last_lora_weights.pt"))
 
+                # Clear CUDA cache before going back to training
+                torch.cuda.empty_cache()
+
                 # Back to training mode
                 self.model.train()
             else:
                 # No validation - just save model each epoch
-                out_dir = Path(self.config["output"]["output_dir"])
-                out_dir.mkdir(parents=True, exist_ok=True)
                 save_lora_weights(self.model, str(out_dir / "last_lora_weights.pt"))
 
         # Final save
-        out_dir = Path(self.config["output"]["output_dir"])
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         if has_validation:
             print(f"\n✅ Training complete!")
