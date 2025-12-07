@@ -256,8 +256,8 @@ def convert_predictions_to_coco_format(predictions_list, image_ids, resolution=2
                 print(f"[DEBUG]   Filtered scores: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
                 print(f"[DEBUG]   Box range: {boxes.min():.4f} to {boxes.max():.4f}")
 
-        # Convert masks to binary (kept at native 288×288 - fast!)
-        binary_masks = (masks > 0.5).cpu()
+        # Convert masks to binary (apply sigmoid first, then threshold)
+        binary_masks = (torch.sigmoid(masks) > 0.5).cpu()
 
         if len(binary_masks) > 0:
             mask_areas = binary_masks.flatten(1).sum(1)

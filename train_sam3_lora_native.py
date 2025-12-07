@@ -263,8 +263,8 @@ def convert_predictions_to_coco_format(predictions_list, image_ids, resolution=2
         if debug and img_id == image_ids[0]:  # Debug first image only
             print(f"  Image {img_id}: {num_before} queries -> {len(scores)} after filtering (threshold={score_threshold})")
 
-        # Convert masks to binary
-        binary_masks = (masks > 0.5).cpu()
+        # Convert masks to binary (apply sigmoid first, then threshold)
+        binary_masks = (torch.sigmoid(masks) > 0.5).cpu()
 
         # Encode masks to RLE (at native resolution - much faster!)
         if len(binary_masks) > 0:
@@ -617,12 +617,12 @@ class SAM3TrainerNative:
 
                 # Extract total loss
                 total_loss = loss_dict[CORE_LOSS_KEY]
-                
+
                 # Backward
                 self.optimizer.zero_grad()
                 total_loss.backward()
                 self.optimizer.step()
-                
+
                 pbar.set_postfix({"loss": total_loss.item()})
 
             # Validation (only if validation data exists)
