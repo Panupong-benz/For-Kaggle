@@ -184,16 +184,23 @@ class COCOSegmentDataset(Dataset):
         )
 
         # Construct Query
-        # Use generic class-agnostic prompt for better generalization
-        # SAM models work better with simple generic terms
+        # Use category names from COCO annotations for category-aware validation
         object_ids = [obj.object_id for obj in objects]
 
-        # Use class-agnostic prompt - SAM models are trained to detect generic "things"
-        # This works better than domain-specific terms like "cracks", "joint" etc.
-        if len(objects) > 0:
-            query_text = "object"
+        # Determine query text based on categories present in the image
+        if len(object_class_names) > 0:
+            unique_classes = list(set(object_class_names))
+            if len(unique_classes) == 1:
+                # Single category: use its name (lowercase)
+                query_text = unique_classes[0].lower()
+            else:
+                # Multiple categories: use most common one
+                # This helps the model learn category-specific features
+                from collections import Counter
+                most_common = Counter(object_class_names).most_common(1)[0][0]
+                query_text = most_common.lower()
         else:
-            # Skip images with no annotations
+            # No annotations: use generic term
             query_text = "object"
 
         query = FindQueryLoaded(
