@@ -9,8 +9,8 @@ model:
 
 # LoRA settings
 lora:
-  rank: 4                   # Reduced from 64 to avoid OOM
-  alpha: 8                  # 2x rank (scaling factor)
+  rank: 32                   # Reduced from 64 to avoid OOM
+  alpha: 64                  # 2x rank (scaling factor)
   dropout: 0.0               # Some dropout for regularization
 
   # Target modules for SAM3 architecture
@@ -54,8 +54,8 @@ lora:
 
   # Apply LoRA to ALL components for maximum adaptation
   apply_to_vision_encoder: true    # Vision backbone (ViT)
-  apply_to_text_encoder: true      # Language backbone (CLIP text encoder)
-  apply_to_geometry_encoder: true  # Geometry encoder for prompts
+  apply_to_text_encoder: false      # Language backbone (CLIP text encoder)
+  apply_to_geometry_encoder: false  # Geometry encoder for prompts
   apply_to_detr_encoder: true      # DETR-style transformer encoder
   apply_to_detr_decoder: true      # DETR-style transformer decoder
   apply_to_mask_decoder: true      # Mask prediction head
