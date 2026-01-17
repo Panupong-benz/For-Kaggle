@@ -53,11 +53,11 @@ lora:
     - "linear2"              # Transformer FFN second layer
 
   # Apply LoRA to ALL components for maximum adaptation
-  apply_to_vision_encoder: false    # Vision backbone (ViT)
+  apply_to_vision_encoder: true    # Vision backbone (ViT)
   apply_to_text_encoder: false      # Language backbone (CLIP text encoder)
   apply_to_geometry_encoder: false  # Geometry encoder for prompts
-  apply_to_detr_encoder: true      # DETR-style transformer encoder
-  apply_to_detr_decoder: true      # DETR-style transformer decoder
+  apply_to_detr_encoder: false      # DETR-style transformer encoder
+  apply_to_detr_decoder: false      # DETR-style transformer decoder
   apply_to_mask_decoder: true      # Mask prediction head
 
 # Training settings
