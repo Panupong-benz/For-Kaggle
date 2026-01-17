@@ -9,8 +9,8 @@ model:
 
 # LoRA settings
 lora:
-  rank: 8                   # Reduced from 64 to avoid OOM
-  alpha: 16                  # 2x rank (scaling factor)
+  rank: 4                   # Reduced from 64 to avoid OOM
+  alpha: 8                  # 2x rank (scaling factor)
   dropout: 0.0               # Some dropout for regularization
 
   # Target modules for SAM3 architecture
