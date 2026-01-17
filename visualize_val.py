@@ -1,84 +1,87 @@
 import os
-import json
 import torch
 import numpy as np
+import cv2
+from pathlib import Path
 import matplotlib.pyplot as plt
-from PIL import Image
 
 from sam3.model_builder import build_sam3_image_model
+from sam3.train.datasets.coco_seg_dataset import COCOSegmentDataset
+from sam3.utils.mask_utils import masks_to_polygons
 
-# =====================
-# PATH CONFIG
-# =====================
-VAL_DIR = "/kaggle/working/For-Kaggle/data/valid"
-ANN_FILE = os.path.join(VAL_DIR, "_annotations.coco.json")
-WEIGHTS = "outputs/sam3_lora_full/best_lora_weights.pt"
 
+# =========================
+# CONFIG
+# =========================
+CONFIG_PATH = "configs/full_lora_config.yaml"
+LORA_WEIGHTS = "outputs/sam3_lora_full/best_lora_weights.pt"
+VAL_DIR = "/kaggle/working/For-Kaggle/data"
+OUTPUT_DIR = "vis_results"
+NUM_SAMPLES = 5
 DEVICE = "cuda"
 
-# =====================
-# LOAD COCO
-# =====================
-with open(ANN_FILE, "r") as f:
-    coco = json.load(f)
 
-images = coco["images"]
-annotations = coco["annotations"]
+# =========================
+# Utils
+# =========================
+def overlay_mask(img, mask, color):
+    overlay = img.copy()
+    overlay[mask > 0] = color
+    return cv2.addWeighted(overlay, 0.5, img, 0.5, 0)
 
-# image_id -> anns
-img_to_anns = {}
-for ann in annotations:
-    img_to_anns.setdefault(ann["image_id"], []).append(ann)
 
-# =====================
-# LOAD MODEL
-# =====================
-model = build_sam3_image_model()
-model.load_state_dict(torch.load(WEIGHTS, map_location=DEVICE), strict=False)
-model.to(DEVICE)
-model.eval()
+# =========================
+# Main
+# =========================
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# =====================
-# HELPER
-# =====================
-def draw_gt(ax, anns):
-    for ann in anns:
-        if "segmentation" in ann:
-            for seg in ann["segmentation"]:
-                xs = seg[0::2]
-                ys = seg[1::2]
-                ax.plot(xs, ys, color="lime", linewidth=2)
+    print("Loading model (image-only)...")
+    model = build_sam3_image_model(
+        apply_text_encoder=False  # 🔴 สำคัญมาก
+    )
 
-def draw_pred(ax, masks):
-    for m in masks:
-        m = m.cpu().numpy()
-        ys, xs = np.where(m > 0.5)
-        ax.scatter(xs, ys, s=1, c="red")
+    ckpt = torch.load(LORA_WEIGHTS, map_location="cpu")
+    model.load_state_dict(ckpt, strict=False)
 
-# =====================
-# VISUALIZE 5 IMAGES
-# =====================
-for img_meta in images[:5]:
-    img_path = os.path.join(VAL_DIR, img_meta["file_name"])
-    img = Image.open(img_path).convert("RGB")
+    model.to(DEVICE)
+    model.eval()
 
-    img_tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
-    img_tensor = img_tensor.unsqueeze(0).to(DEVICE)
+    print("Loading validation dataset...")
+    dataset = COCOSegmentDataset(VAL_DIR, split="valid")
 
-    with torch.no_grad():
-        outputs = model(img_tensor)
+    for idx in range(min(NUM_SAMPLES, len(dataset))):
+        sample = dataset[idx]
 
-    pred_masks = outputs[0]["masks"]
+        image = sample["image"].to(DEVICE).unsqueeze(0)
+        gt_masks = sample["masks"].cpu().numpy()
 
-    fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-    ax.imshow(img)
-    ax.set_title(img_meta["file_name"])
+        with torch.no_grad():
+            outputs = model(image)
 
-    # GT = สีเขียว
-    draw_gt(ax, img_to_anns.get(img_meta["id"], []))
+        pred_masks = outputs[0]["pred_masks"].sigmoid() > 0.5
+        pred_masks = pred_masks.cpu().numpy()
 
-    # Prediction = สีแดง
-    draw_pred(ax, pred_masks)
+        img_np = (image[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
 
-    ax.axis("off")
-    plt.show()
+        # =========================
+        # Visualization
+        # =========================
+        vis = img_np.copy()
+
+        for m in gt_masks:
+            vis = overlay_mask(vis, m, (0, 255, 0))  # GT = green
+
+        for m in pred_masks:
+            vis = overlay_mask(vis, m, (255, 0, 0))  # Pred = red
+
+        save_path = f"{OUTPUT_DIR}/val_{idx}.png"
+        cv2.imwrite(save_path, vis[:, :, ::-1])
+
+        print(f"Saved: {save_path}")
+
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()
