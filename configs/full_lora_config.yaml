@@ -58,7 +58,7 @@ lora:
   apply_to_geometry_encoder: false  # Geometry encoder for prompts
   apply_to_detr_encoder: false      # DETR-style transformer encoder
   apply_to_detr_decoder: false      # DETR-style transformer decoder
-  apply_to_mask_decoder: true      # Mask prediction head
+  apply_to_mask_decoder: false      # Mask prediction head
 
 # Training settings
 training:
