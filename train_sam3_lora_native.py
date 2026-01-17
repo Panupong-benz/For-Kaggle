@@ -146,7 +146,7 @@ class COCOSegmentDataset(Dataset):
         print(f"  Annotations: {len(self.coco_data['annotations'])}")
         print(f"  Categories: {self.categories}")
 
-        self.resolution = 1008
+        self.resolution = 576
         self.transform = v2.Compose([
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
