@@ -9,8 +9,8 @@ model:
 
 # LoRA settings
 lora:
-  rank: 32                   # Reduced from 64 to avoid OOM
-  alpha: 64                  # 2x rank (scaling factor)
+  rank: 8                   # Reduced from 64 to avoid OOM
+  alpha: 16                  # 2x rank (scaling factor)
   dropout: 0.0               # Some dropout for regularization
 
   # Target modules for SAM3 architecture
@@ -53,7 +53,7 @@ lora:
     - "linear2"              # Transformer FFN second layer
 
   # Apply LoRA to ALL components for maximum adaptation
-  apply_to_vision_encoder: true    # Vision backbone (ViT)
+  apply_to_vision_encoder: false    # Vision backbone (ViT)
   apply_to_text_encoder: false      # Language backbone (CLIP text encoder)
   apply_to_geometry_encoder: false  # Geometry encoder for prompts
   apply_to_detr_encoder: true      # DETR-style transformer encoder
@@ -73,7 +73,7 @@ training:
   adam_epsilon: 1e-8
   max_grad_norm: 1.0
 
-  num_epochs: 5       # Reduced from 500 (small dataset overfits quickly)
+  num_epochs: 1       # Reduced from 500 (small dataset overfits quickly)
   warmup_steps: 200     # Reduced from 1000 (proportional to dataset size)
   lr_scheduler: "cosine"
 
