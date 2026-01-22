@@ -82,7 +82,7 @@ training:
   save_steps: 100       # More frequent checkpoints (from 1000)
   save_total_limit: 5   # Keep more checkpoints
 
-  mixed_precision: "bf16"    # Use bfloat16 if available
+  mixed_precision: "fp16"    # Use bfloat16 if available
   seed: 42
   gradient_accumulation_steps: 8  # Reduced from 16 (effective batch: 2×8=16)
 
