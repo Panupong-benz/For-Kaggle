@@ -31,7 +31,7 @@ lora:
 
 # Training settings
 training:
-  data_dir: "/workspace/data2"
+  data_dir: "/workspace/data"
   batch_size: 2         # Larger than full config (fewer LoRA params)
   num_workers: 2
 
