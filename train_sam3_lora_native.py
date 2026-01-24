@@ -146,7 +146,12 @@ class COCOSegmentDataset(Dataset):
         print(f"  Annotations: {len(self.coco_data['annotations'])}")
         print(f"  Categories: {self.categories}")
 
-        self.resolution = 1008
+        self.input_w = 2048      #self.resolution = 1008 <= อันเดิม
+        self.input_h = 1152
+        # ⭐ เพิ่มบรรทัดนี้
+        self.width = self.input_w
+        self.height = self.input_h
+  
         self.transform = v2.Compose([
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
@@ -166,8 +171,7 @@ class COCOSegmentDataset(Dataset):
         orig_w, orig_h = pil_image.size
 
         # Resize image
-        pil_image = pil_image.resize((self.resolution, self.resolution), PILImage.BILINEAR)
-
+        pil_image = pil_image.resize((self.input_w, self.input_h), PILImage.BILINEAR)    #pil_image = pil_image.resize((self.resolution, self.resolution), PILImage.BILINEAR) <= อันเดิม
         # Transform to tensor
         image_tensor = self.transform(pil_image)
 
@@ -178,8 +182,8 @@ class COCOSegmentDataset(Dataset):
         object_class_names = []
 
         # Scale factors
-        scale_w = self.resolution / orig_w
-        scale_h = self.resolution / orig_h
+        scale_w = self.input_w / orig_w    # scale_w = self.resolution / orig_w   <= อันเดิม
+        scale_h = self.input_h / orig_h    # scale_h = self.resolution / orig_h  <= อันเดิม
 
         for i, ann in enumerate(annotations):
             # Get bbox - format is [x, y, width, height] in COCO format
@@ -201,9 +205,13 @@ class COCOSegmentDataset(Dataset):
             box_tensor[2] *= scale_w
             box_tensor[1] *= scale_h
             box_tensor[3] *= scale_h
-
+            
             # IMPORTANT: Normalize boxes to [0, 1] range (required by SAM3 loss functions)
-            box_tensor /= self.resolution
+            box_tensor[0] /= self.input_w        # box_tensor /= self.resolution 
+            box_tensor[2] /= self.input_w
+            box_tensor[1] /= self.input_h
+            box_tensor[3] /= self.input_h
+
 
             # Handle segmentation mask (polygon or RLE format)
             segment = None
@@ -230,7 +238,7 @@ class COCOSegmentDataset(Dataset):
                     mask_t = torch.from_numpy(mask_np).float().unsqueeze(0).unsqueeze(0)
                     mask_t = torch.nn.functional.interpolate(
                         mask_t,
-                        size=(self.resolution, self.resolution),
+                        size=(self.input_h, self.input_w),      # size=(self.resolution, self.resolution) <= อันเดิม
                         mode="nearest"
                     )
                     segment = mask_t.squeeze() > 0.5  # [1008, 1008] boolean tensor
@@ -250,7 +258,7 @@ class COCOSegmentDataset(Dataset):
         image_obj = Image(
             data=image_tensor,
             objects=objects,
-            size=(self.resolution, self.resolution)
+            size=(self.input_h, self.input_w)    # size=(self.resolution, self.resolution) <= อันเดิม
         )
 
         # Construct Query
@@ -451,7 +459,13 @@ def convert_predictions_to_coco_format(predictions_list, image_ids, resolution=2
     return coco_predictions
 
 
-def create_coco_gt_from_dataset(dataset, image_ids=None, mask_resolution=288):
+def create_coco_gt_from_dataset(    # def create_coco_gt_from_dataset(dataset, image_ids=None, mask_resolution=288): <= อันเดิม
+    dataset,
+    image_ids=None,
+    mask_h=288,
+    mask_w=512
+):
+
     """
     Create COCO ground truth dictionary from SimpleSAM3Dataset.
 
@@ -480,15 +494,17 @@ def create_coco_gt_from_dataset(dataset, image_ids=None, mask_resolution=288):
     ann_id = 0
     indices = range(len(dataset)) if image_ids is None else image_ids
 
-    # Scale factor for boxes (masks will be at mask_resolution, boxes scaled accordingly)
-    scale_factor = mask_resolution / dataset.resolution
+
+
+
+  
 
     for idx in indices:
         # Add image entry at mask resolution
         coco_gt['images'].append({
             'id': int(idx),
-            'width': mask_resolution,
-            'height': mask_resolution,
+            'width': mask_w,
+            'height': mask_h,
             'is_instance_exhaustive': True  # Required for cgF1 evaluation
         })
 
@@ -498,9 +514,14 @@ def create_coco_gt_from_dataset(dataset, image_ids=None, mask_resolution=288):
         # Add annotations
         for obj in datapoint.images[0].objects:
             # Convert normalized box to pixel coordinates at mask_resolution
-            box = obj.bbox * mask_resolution
-            x1, y1, x2, y2 = box.tolist()
-            x, y, w, h = x1, y1, x2-x1, y2-y1
+            x1, y1, x2, y2 = obj.bbox.tolist()              # มีการแก้ไข
+            # Assume bbox normalized in original image space
+            x1 *= mask_w
+            x2 *= mask_w
+            y1 *= mask_h
+            y2 *= mask_h
+            
+            x, y, w, h = x1, y1, x2 - x1, y2 - y1
 
             ann = {
                 'id': ann_id,
@@ -516,12 +537,13 @@ def create_coco_gt_from_dataset(dataset, image_ids=None, mask_resolution=288):
             if obj.segment is not None:
                 # Downsample mask from 1008×1008 to mask_resolution×mask_resolution
                 mask_tensor = obj.segment.unsqueeze(0).unsqueeze(0).float()
-                downsampled_mask = torch.nn.functional.interpolate(
+                downsampled_mask = torch.nn.functional.interpolate(        # มีการแก้ไข
                     mask_tensor,
-                    size=(mask_resolution, mask_resolution),
+                    size=(mask_h, mask_w),
                     mode='bilinear',
                     align_corners=False
                 ) > 0.5
+
 
                 mask_np = downsampled_mask.squeeze().cpu().numpy().astype(np.uint8)
                 rle = mask_utils.encode(np.asfortranarray(mask_np))
